@@ -39,6 +39,8 @@ classdef arduino < handle % use the class as a handle
     PROTOCOL_VERSION        = 0xF9;
     SYSTEM_RESET            = 0xFF;
     
+
+    % SYSEX COMMANDS (second byte)
     EXTENDED_ID             = 0x00;
     ANALOG_MAPPING_QUERY    = 0x69;
     ANALOG_MAPPING_RESPONSE = 0x6A;
@@ -52,7 +54,19 @@ classdef arduino < handle % use the class as a handle
     SAMPLING_INTERVAL       = 0x7A;
     SYSEX_NON_REALTIME      = 0x7E;
     SYSEX_REALTIME          = 0x7F;
-    
+    ACCELSTEPPER            = 0x62;
+
+    % accelstepper commands
+    AS_CONFIG               = 0x00;
+    AS_REL_MOVE_TO          = 0x02;
+    AS_ENABLE               = 0x04;
+    AS_STOP                 = 0x05;
+    AS_REPORT_POS           = 0x06;
+    AS_MOVE_COMPLETE        = 0x0a;
+    AS_SET_ACCEL            = 0x08;
+    AS_SET_SPEED            = 0x09;
+
+
     % pin mappings of various boards
     %                AvailablePins,     Board, Voltage
     BOARD_MAPS = {"{'D0-D19', 'A0-A5'}","Uno",5;... % Arduino Uno
@@ -384,6 +398,83 @@ classdef arduino < handle % use the class as a handle
       msb = bitshift(double(data(2)),7);
       value = bitor(lsb,msb);
       volt =  double(value*obj.Voltage) / double(obj.ANALOG_MAX);
+    endfunction % _readVoltage
+
+    % AccelStepper-related methods
+    % type 1 - stepper controller
+    function initStepperType1(obj, stepperID, stepPin, dirPin, enablePin = 0)
+      obj._initStepper(stepperID, 1, stepPin, dirPin, 0, 0, enablePin);
+    endfunction
+
+    % type 4 - 4-wire
+    function initStepperType4(obj, stepperID, pin1, pin2, pin3, pin4, enablePin = 0)
+      obj._initStepper(stepperID, 4, pin1, pin2, pin3, pin4, enablePin);
+    endfunction
+
+    function setSpeed(obj, stepperID, speed)
+      msg = [...
+        obj.START_SYSEX, ...
+        obj.ACCELSTEPPER, ...
+        obj.AS_SET_SPEED, ...
+        stepperID, ...
+        encodeCustomFloat(speed), ...
+        obj.END_SYSEX, ...
+      ];
+      n = obj.ard_write(obj.connection,char(msg));
+    endfunction
+
+    % 0 = no accelleration, full speed
+    function setAccel(obj, stepperID, accel)
+      msg = [...
+        obj.START_SYSEX, ...
+        obj.ACCELSTEPPER, ...
+        obj.AS_SET_ACCEL, ...
+        stepperID, ...
+        encodeCustomFloat(accel), ...
+        obj.END_SYSEX, ...
+      ];
+      n = obj.ard_write(obj.connection,char(msg));
+    endfunction
+
+    function enableStepper(obj, stepperID)
+      obj._enableStepper(stepperID, 1);
+    endfunction
+
+    function disableStepper(obj, stepperID)
+      obj._enableStepper(stepperID, 0);
+    endfunction
+
+    function relMoveTo(obj, stepperID, steps)
+      msg = [...
+        obj.START_SYSEX, ...
+        obj.ACCELSTEPPER, ...
+        obj.AS_REL_MOVE_TO, ...
+        stepperID, ...
+        encode32BitSignedInteger(steps), ...
+        obj.END_SYSEX, ...
+      ];
+      n = obj.ard_write(obj.connection,char(msg));
+    endfunction
+
+    function [position, stepperID] = checkMoveComplete(obj)
+      position = [];
+      stepperID = [];
+
+      % tic();
+      [cmd, msg] = obj.read_sysex_noblock();
+      % toc()
+      if cmd == obj.ACCELSTEPPER
+        % subcommand in message
+        subCmd = msg(1);
+
+        if subCmd == obj.AS_MOVE_COMPLETE || subCmd == obj.AS_REPORT_POS
+          stepperID = msg(2);
+          bytes = msg(3:end);
+          position = decode32BitSignedInteger(bytes);
+          % move finished
+          return;
+        endif
+      endif
     endfunction
 
     function display(obj)
@@ -400,11 +491,35 @@ classdef arduino < handle % use the class as a handle
       printf("            AvailablePins: ");printf(obj.AvailablePins);printf("\n");
       printf("                  Voltage: ");printf(num2str(obj.Voltage));printf("V\n");
       printf("\n");
-    endfunction
+    endfunction % display
   endmethods
 
 
   methods %(Access=private,Hidden=true)
+    function _initStepper(obj, stepperID, driverType, pin1, pin2, pin3, pin4, enablePin = 0)
+      % the library cannot mix stepper sizes. Using WHOLE_STEP, switching step size by digitalWrite,
+      % and keeping track of current position in host (i.e. here)
+      persistent WHOLE_STEP = 0;
+
+      hasEnablePin = enablePin > 0;
+      interface = bitshift(bitand(driverType, 0x07), 4) + bitshift(bitand(WHOLE_STEP, 0x07), 1) + hasEnablePin;
+      msg = [...
+        obj.START_SYSEX, ...
+        obj.ACCELSTEPPER, ...
+        obj.AS_CONFIG, ...
+        stepperID, ...
+        interface, ...
+        pin1, ...
+        pin2, ...
+        pin3, ... % motor pin 3
+        pin4, ... % motor pin 4
+        enablePin, ...
+        0, ... % pins to invert
+        obj.END_SYSEX, ...
+      ];
+      n = obj.ard_write(obj.connection,char(msg));
+    endfunction
+
     function [p,analog] = pinNumber(obj,pin)
       if ~ischar(pin)
         disp("pin must be a string ('D3', 'A10')\n");
@@ -422,6 +537,18 @@ classdef arduino < handle % use the class as a handle
         p = str2num(pin(2:end));
         analog = -1;
       endif
+    endfunction % pinNumber
+
+    function _enableStepper(obj, stepperID, status)
+      msg = [...
+        obj.START_SYSEX, ...
+        obj.ACCELSTEPPER, ...
+        obj.AS_ENABLE, ...
+        stepperID, ...
+        status, ...
+        obj.END_SYSEX, ...
+      ];
+      n = obj.ard_write(obj.connection,char(msg));
     endfunction
 
     function obj = analog_mapping_query(obj)
@@ -482,6 +609,7 @@ classdef arduino < handle % use the class as a handle
 
     function [cmd,msg] = read_sysex(obj,max_size=100)
       % a backend function to read a sysex message
+      % blocking until sysex read of TIMEOUT expired
       msg = []; % a buffer to hold the message
       data = 0;
       % check for sysex start message
@@ -501,6 +629,78 @@ classdef arduino < handle % use the class as a handle
         endif
         msg = [msg data]; % append the new data to the whole message
       endwhile
+    endfunction % read_sysex
+
+    % Reads sysex msg. No blocking - if no msg is available, returns right away empty cmd.
+    % The method sets connection timeout to zero, always restores to original value when returning (unwind_protect)
+    function [cmd, msg] = read_sysex_noblock(obj)
+      % const - delay between reading each char - the data should be aleady buffered in HW
+      persistent READ_DELAY = 0.001;
+
+      msg = []; % a buffer to hold the message
+      cmd = []; % single number
+      data = 0;
+
+      origTimeout = get(obj.connection, 'timeout');
+      unwind_protect % for restoring the origTimeout
+        % zero serial timeout
+        set(obj.connection, 'timeout', 0);
+        [data,count] = obj.ard_read(obj.connection,1);
+        if count == 0
+          % nothing available yet
+          return;
+        endif
+
+        % reading noise up to START_SYSEX
+        strt = time();
+        while data ~= obj.START_SYSEX
+          [data,count] = obj.ard_read(obj.connection,1);
+          if count == 0
+            % noise read, nothing more available
+            return;
+          endif
+          % waiting for next char, had it not arrived yet
+          pause(READ_DELAY);
+
+          % still something available, but not sysex start msg
+          if (time()-strt) > obj.TIMEOUT
+            disp("reading sysex timed out\n");
+            return;
+          endif
+        endwhile
+
+        % reading the command
+        [cmd,count] = obj.ard_read(obj.connection,1);
+        if count == 0
+          % no command read
+          disp("START_SYSEX not followed by command\n");
+          return;
+        endif
+
+        % reading data
+        while true
+          [data,count] = obj.ard_read(obj.connection,1); % read each value
+          if count == 0
+            % stream interrupted, exiting
+            disp("no final END_SYSEX, dropping the cmd/data\n");
+            cmd = [];
+            msg=[];
+            return;
+          elseif data==obj.END_SYSEX
+            % SUCCESS, returning the completed message
+            return
+          endif
+
+          % appending new data to the whole message
+          msg = [msg data];
+          % waiting for next char, had it not arrived yet
+          pause(READ_DELAY);
+        endwhile
+
+      unwind_protect_cleanup
+        % restoring original serial timeout
+        set(obj.connection, 'timeout', origTimeout);
+      end_unwind_protect
     endfunction
 
 
