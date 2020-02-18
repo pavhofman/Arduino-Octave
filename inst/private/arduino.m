@@ -25,9 +25,9 @@ classdef arduino < handle % use the class as a handle
     MAJOR_VERSION = 2;
     MINOR_VERSION = 5;
     VERSION = 2.5;
-    %ANALOG_MAX = 1023; % maximum analog value
     
     % Firmata Protocol
+    % MGS COMMANDS (first byte)
     ANALOG_MSG              = 0xE0;
     DIGITAL_MSG             = 0x90;
     REPORT_ANALOG           = 0xC0;
@@ -66,6 +66,7 @@ classdef arduino < handle % use the class as a handle
                   "{}","Generic 1.8V",1.8;... % generic, a 1.8V board
                   };
   endproperties % read-only property
+
   properties (SetAccess=private)
     connection_type; % 'serial' or 'tcp'
     connection; % the connection object, either 
@@ -84,10 +85,12 @@ classdef arduino < handle % use the class as a handle
     firmware;
     FirmataVersion;
   endproperties
+
   properties (SetAccess=private)
     Voltage;
     ANALOG_MAX = 1023; % maximum analog value
   endproperties
+
   methods
     function obj = arduino(address,Board,port)
       try % load the necessary packages
@@ -241,7 +244,9 @@ classdef arduino < handle % use the class as a handle
       endif
       
       % finally, the board is set up!
-    endfunction
+    endfunction % arduino
+
+
     function mode = _configurePin(obj,pin,mode)
       pin = obj.pinNumber(pin); % get the pin number
       if nargin > 2 % if the mode is read in
@@ -284,7 +289,9 @@ classdef arduino < handle % use the class as a handle
         % analog_mapping_query(obj);
         mode = obj.pin_modes{pin};
       endif
-    endfunction
+    endfunction % _configurePin
+
+
     function [val,err] = _readDigitalPin(obj,pin)
       old_mode = obj._configurePin(pin);
       if (~strcmp(old_mode,'DigitalInput')) && (~strcmp(old_mode,'Pullup'))
@@ -298,6 +305,9 @@ classdef arduino < handle % use the class as a handle
       obj.ard_write(obj.connection,msg1);
       obj.ard_write(obj.connection,msg2);
       
+      val = 0;
+      err = 0;
+
       data = 0;
       strt = time();
       while data ~= bitor(obj.DIGITAL_MSG,port)
@@ -311,7 +321,9 @@ classdef arduino < handle % use the class as a handle
       [data,count] = obj.ard_read(obj.connection,2);
       port_map = bitor(data(1), bitshift(bitand(data(2),1),7)); % make a port map
       val = ~(0==bitand(port_map,bitshift(1,bit))); % return the value of that bit
-    endfunction
+    endfunction % _readDigitalPin
+
+
     function _writeDigitalPin(obj,pin,val)
       p = obj.pinNumber(pin);
       msg = [obj.SET_DIGITAL_PIN_VAL,p,~(val==0)];
@@ -319,10 +331,14 @@ classdef arduino < handle % use the class as a handle
       n = obj.ard_write(obj.connection,char(msg));
       %srl_flush(obj.connection,0); % flush output
     endfunction
+
+
     function _writePWMVoltage(obj,pin,volt)
       duty = volt / obj.Voltage; % get the percentage
       obj._writePWMDutyCycle(pin,duty);
     endfunction
+
+
     function _writePWMDutyCycle(obj,pin,duty)
       duty = int16(255*duty); % convert to the 8-bit value
       if duty > 255
@@ -334,7 +350,9 @@ classdef arduino < handle % use the class as a handle
       msb = bitshift(duty,-7);
       msg = char([obj.START_SYSEX, obj.EXTENDED_ANALOG, p, lsb, msb, obj.END_SYSEX]);
       n = obj.ard_write(obj.connection,msg);
-    endfunction
+    endfunction % _writeDigitalPin
+
+
     function [volt,value,err] = _readVoltage(obj,pin)
       volt = 0;
       value = 0;
@@ -367,6 +385,7 @@ classdef arduino < handle % use the class as a handle
       value = bitor(lsb,msb);
       volt =  double(value*obj.Voltage) / double(obj.ANALOG_MAX);
     endfunction
+
     function display(obj)
       printf("   arduino with properties:\n\n");
       if strcmp(obj.connection_type,'tcp')
@@ -383,6 +402,8 @@ classdef arduino < handle % use the class as a handle
       printf("\n");
     endfunction
   endmethods
+
+
   methods %(Access=private,Hidden=true)
     function [p,analog] = pinNumber(obj,pin)
       if ~ischar(pin)
@@ -402,6 +423,7 @@ classdef arduino < handle % use the class as a handle
         analog = -1;
       endif
     endfunction
+
     function obj = analog_mapping_query(obj)
       msg = char([obj.START_SYSEX,obj.ANALOG_MAPPING_QUERY,obj.END_SYSEX]);
       #srl_flush(obj.connection) % flush the serial line
@@ -455,7 +477,9 @@ classdef arduino < handle % use the class as a handle
         obj.AvailablePins = [obj.AvailablePins, "'"];
       endif
       obj.AvailablePins = [obj.AvailablePins, "}"];
-    endfunction
+    endfunction % analog_mapping_query
+
+
     function [cmd,msg] = read_sysex(obj,max_size=100)
       % a backend function to read a sysex message
       msg = []; % a buffer to hold the message
@@ -478,6 +502,8 @@ classdef arduino < handle % use the class as a handle
         msg = [msg data]; % append the new data to the whole message
       endwhile
     endfunction
+
+
     function [val,ip,port] = ifIP(obj,msg)
       % tells if msg is an ip address, returns the ip and port if so.
       val = 0; % default to no ip
