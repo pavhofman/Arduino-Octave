@@ -24,7 +24,7 @@ function moveWait(ard, stepperID, steps)
   endwhile
 
   % disable
-  ard.disable(stepperID);
+  ard.disableStepper(stepperID);
 endfunction
 
 
