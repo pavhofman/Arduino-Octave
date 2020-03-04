@@ -215,9 +215,10 @@ classdef arduino < handle % use the class as a handle
       % find the analog pin map and the maximum digital pin
       analog_mapping_query(obj);
       
-      % specify that all pins are output by default, save it
+      % pins are initialized by the arduino firmata firmware, we do not know exactly how.
+      % Safe default - unknown. The required mode will be sent/set first time the pin is used.
       for i = 1:obj.digital_max
-        obj.pin_modes{i} = 'DigitalOutput';
+        obj.pin_modes{i} = 'Unset';
       endfor
       
       % save the port, board name, and voltage
