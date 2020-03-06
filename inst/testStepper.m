@@ -29,12 +29,12 @@ endfunction
 
 
 % stepper 0 init
-ard.initStepperType4(stepperID, 4, 5, 6, 7);
+ard.initStepperType4(stepperID, 6, 7, 8, 9);
 
-ard.setSpeed(stepperID, 350);
+ard.setSpeed(stepperID, 500);
 
 % 0 accel = acceleration off
-ard.setAccel(stepperID, 100);
+ard.setAccel(stepperID, 0);
 
-moveWait(ard, stepperID, 500);
-moveWait(ard, stepperID, -500);
+moveWait(ard, stepperID, 3000);
+moveWait(ard, stepperID, -3000);
