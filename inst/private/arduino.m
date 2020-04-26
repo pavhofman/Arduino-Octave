@@ -401,6 +401,10 @@ classdef arduino < handle % use the class as a handle
       volt =  double(value*obj.Voltage) / double(obj.ANALOG_MAX);
     endfunction % _readVoltage
 
+    function str = getFirmware(obj)
+      str = obj.firmware;
+    endfunction % getFirmware
+
     % AccelStepper-related methods
     % type 1 - stepper controller
     function initStepperType1(obj, stepperID, stepPin, dirPin, enablePin = 0)
