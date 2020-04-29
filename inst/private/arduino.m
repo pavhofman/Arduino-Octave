@@ -79,6 +79,9 @@ classdef arduino < handle % use the class as a handle
                   "{}","Generic 3.3V",3.3;... % generic, a 3.3V board
                   "{}","Generic 1.8V",1.8;... % generic, a 1.8V board
                   };
+
+    % const - delay between reading each char - the data should be already buffered in HW
+    READ_DELAY = 0.001;
   endproperties % read-only property
 
   properties (SetAccess=private)
@@ -98,6 +101,8 @@ classdef arduino < handle % use the class as a handle
     pin_modes; % saves all pin modes
     firmware;
     FirmataVersion;
+    lastSysexCmd = []; % received  by non-sysex reading method, waiting to read with sysex method
+    lastSysexMsg = [];
   endproperties
 
   properties (SetAccess=private)
@@ -311,10 +316,13 @@ classdef arduino < handle % use the class as a handle
 
 
     function [val,err] = _readDigitalPin(obj,pin)
+      % configuring pin mode if not for input
       old_mode = obj._configurePin(pin);
       if (~strcmp(old_mode,'DigitalInput')) && (~strcmp(old_mode,'Pullup'))
         obj._configurePin(pin,'DigitalInput');
       endif
+
+      % sending report request
       p = obj.pinNumber(pin);
       port = floor(p / 7); % find the port
       bit = mod(p,7); % find the bit
@@ -323,22 +331,42 @@ classdef arduino < handle % use the class as a handle
       obj.ard_write(obj.connection,msg1);
       obj.ard_write(obj.connection,msg2);
       
+      % waiting for response
       val = 0;
       err = 0;
 
-      data = 0;
-      strt = time();
-      while data ~= bitor(obj.DIGITAL_MSG,port)
-        [data,count] = obj.ard_read(obj.connection,1); % read in the info, while trying to get rid of more
-        if (time()-strt) > obj.TIMEOUT
-          disp('timed out');
-          err = 1;
+      % looping until DIGITAL_MSG arrives or TIMEOUT.
+      % meanwhile sysex messages can arrive
+      % only last sysex msg is stored
+      % TODO - support for storing multiple sysex messages arriving before DIGITAL_MSG
+      while true
+        data = 0;
+        strt = time();
+        % waiting until DIGITAL_MSG or START_SYSEX arrives
+        while (data ~= bitor(obj.DIGITAL_MSG,port)) && data ~= obj.START_SYSEX
+          [data,count] = obj.ard_read(obj.connection,1); % read in the info, while trying to get rid of more
+          if (time()-strt) > obj.TIMEOUT
+            disp('timed out');
+            err = 1;
+            return;
+          endif
+        endwhile
+
+        % 2 options - DIGITAL_MSG or START_SYSEX (e.g. stepper data)
+        if data == obj.START_SYSEX
+          %disp('Received SYSEX while waiting for DIGITAL_MSG, storing');
+          % SYSEX - storing for eventual sysex read call
+          [obj.lastSysexCmd, obj.lastSysexMsg] = obj._read_sysex_data();
+          % go to reading next message, should be DIGITAL_MSG
+          continue;
+        else
+          % DIGITAL_MSG
+          val = obj._readDigitalMsgData(bit);
+          % finished
           return;
-        endif
-      endwhile
-      [data,count] = obj.ard_read(obj.connection,2);
-      port_map = bitor(data(1), bitshift(bitand(data(2),1),7)); % make a port map
-      val = ~(0==bitand(port_map,bitshift(1,bit))); % return the value of that bit
+        endif % DIGITAL_MSG or START_SYSEX
+
+      endwhile % endless loop, terminated by DIGITAL_MSG or TIMEOUT.
     endfunction % _readDigitalPin
 
 
@@ -386,7 +414,7 @@ classdef arduino < handle % use the class as a handle
       % srl_flush(obj.connection);
       obj.ard_write(obj.connection,msg1);
       obj.ard_write(obj.connection,msg2);
-      
+
       data = 0;
       strt = time();
       while data~=bitor(obj.ANALOG_MSG,a)
@@ -537,7 +565,7 @@ classdef arduino < handle % use the class as a handle
         disp("pin must be labeled as digital or analog ('D2', 'A5')\n");
         error();
       endif
-      
+
       if pin(1)=='A'
         p = obj.analog_map.(pin);
         analog = str2num(pin(2:end));
@@ -563,7 +591,7 @@ classdef arduino < handle % use the class as a handle
       msg = char([obj.START_SYSEX,obj.ANALOG_MAPPING_QUERY,obj.END_SYSEX]);
       #srl_flush(obj.connection) % flush the serial line
       n = obj.ard_write(obj.connection,msg); % send the query
-      
+
       % get sysex response
       [cmd,msg] = obj.read_sysex();
       if cmd ~= obj.ANALOG_MAPPING_RESPONSE
@@ -572,10 +600,10 @@ classdef arduino < handle % use the class as a handle
       endif
       % get max pin number
       obj.digital_max = length(msg)-1; % the highest pin available
-      
+
       % start saving the available pins in a string
       obj.AvailablePins = sprintf("{'D0-D%i'",obj.digital_max);
-      
+
       % parse analog map
       obj.analog_map = struct();
       analog_pins = [];
@@ -587,7 +615,7 @@ classdef arduino < handle % use the class as a handle
           analog_pins = [analog_pins (msg(i))];
         endif
       endfor
-      
+
       % sort the pins, for analog reference
       if length(analog_pins) > 0
         analog_pins = sort(analog_pins); % sort all pin numberings
@@ -618,6 +646,20 @@ classdef arduino < handle % use the class as a handle
     function [cmd,msg] = read_sysex(obj,max_size=100)
       % a backend function to read a sysex message
       % blocking until sysex read of TIMEOUT expired
+
+      % checking whether sysex data received by other read methods (currently only _readDigitalPin) are waiting for us
+      if ~isempty(obj.lastSysexCmd)
+        %disp('Passing pre-stored SYSEX data');
+        % pre-stored, returning
+        cmd = obj.lastSysexCmd;
+        msg = obj.lastSysexMsg;
+        % clearing for next time
+        obj.lastSysexCmd = []; % received  by non-sysex reading method, waiting to read with sysex method
+        obj.lastSysexMsg = [];
+        % finished
+        return;
+      endif
+
       msg = []; % a buffer to hold the message
       data = 0;
       % check for sysex start message
@@ -642,8 +684,18 @@ classdef arduino < handle % use the class as a handle
     % Reads sysex msg. No blocking - if no msg is available, returns right away empty cmd.
     % The method sets connection timeout to zero, always restores to original value when returning (unwind_protect)
     function [cmd, msg] = read_sysex_noblock(obj)
-      % const - delay between reading each char - the data should be aleady buffered in HW
-      persistent READ_DELAY = 0.001;
+      % checking whether sysex data received by other read methods (currently only _readDigitalPin) are waiting for us
+      if ~isempty(obj.lastSysexCmd)
+        %disp('Passing pre-stored SYSEX data');
+        % pre-stored, returning
+        cmd = obj.lastSysexCmd;
+        msg = obj.lastSysexMsg;
+        % clearing for next time
+        obj.lastSysexCmd = []; % received  by non-sysex reading method, waiting to read with sysex method
+        obj.lastSysexMsg = [];
+        % finished
+        return;
+      endif
 
       msg = []; % a buffer to hold the message
       cmd = []; % single number
@@ -668,7 +720,7 @@ classdef arduino < handle % use the class as a handle
             return;
           endif
           % waiting for next char, had it not arrived yet
-          pause(READ_DELAY);
+          pause(obj.READ_DELAY);
 
           % still something available, but not sysex start msg
           if (time()-strt) > obj.TIMEOUT
@@ -677,39 +729,57 @@ classdef arduino < handle % use the class as a handle
           endif
         endwhile
 
-        % reading the command
-        [cmd,count] = obj.ard_read(obj.connection,1);
-        if count == 0
-          % no command read
-          disp("START_SYSEX not followed by command\n");
-          return;
-        endif
-
-        % reading data
-        while true
-          [data,count] = obj.ard_read(obj.connection,1); % read each value
-          if count == 0
-            % stream interrupted, exiting
-            disp("no final END_SYSEX, dropping the cmd/data\n");
-            cmd = [];
-            msg=[];
-            return;
-          elseif data==obj.END_SYSEX
-            % SUCCESS, returning the completed message
-            return
-          endif
-
-          % appending new data to the whole message
-          msg = [msg data];
-          % waiting for next char, had it not arrived yet
-          pause(READ_DELAY);
-        endwhile
-
+        % % reading the sysex data
+        [cmd, msg] = obj._read_sysex_data();
       unwind_protect_cleanup
         % restoring original serial timeout
         set(obj.connection, 'timeout', origTimeout);
       end_unwind_protect
     endfunction
+
+    function [cmd, msg] = _read_sysex_data(obj)
+      msg = [];
+      % reading the command
+      [cmd,count] = obj.ard_read(obj.connection,1);
+      if count == 0
+        % no command read
+        disp("START_SYSEX not followed by command\n");
+        return;
+      endif
+
+      % reading data
+      while true
+        [data,count] = obj.ard_read(obj.connection,1); % read each value
+        if count == 0
+          % stream interrupted, exiting
+          disp("no final END_SYSEX, dropping the cmd/data\n");
+          cmd = [];
+          msg=[];
+          return;
+        elseif data==obj.END_SYSEX
+          % SUCCESS, returning the completed message
+          return
+        endif
+
+        % appending new data to the whole message
+        msg = [msg data];
+        % waiting for next char, had it not arrived yet
+        pause(obj.READ_DELAY);
+      endwhile
+    endfunction
+
+  endmethods
+
+  methods(Access=protected)
+    function val = _readDigitalMsgData(obj, bit)
+      % reading 2 bytes after DIGITAL_MSG
+      [data,count] = obj.ard_read(obj.connection,2);
+
+      % extracting the pin value from incoming data
+      port_map = bitor(data(1), bitshift(bitand(data(2),1),7)); % make a port map
+      val = ~(0==bitand(port_map,bitshift(1,bit))); % return the value of that bit
+    endfunction
+
 
 
     function [val,ip,port] = ifIP(obj,msg)
@@ -731,6 +801,7 @@ classdef arduino < handle % use the class as a handle
         endif
       endif
     endfunction
+
   endmethods
 
 end
