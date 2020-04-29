@@ -217,7 +217,8 @@ classdef arduino < handle % use the class as a handle
       
       % pins are initialized by the arduino firmata firmware, we do not know exactly how.
       % Safe default - unknown. The required mode will be sent/set first time the pin is used.
-      for i = 1:obj.digital_max
+      % pin_modes are indexed from 1 => obj.digital_max + 1 to allow D0
+      for i = 1:(obj.digital_max + 1)
         obj.pin_modes{i} = 'Unset';
       endfor
       
@@ -264,8 +265,10 @@ classdef arduino < handle % use the class as a handle
 
     function mode = _configurePin(obj,pin,mode)
       pin = obj.pinNumber(pin); % get the pin number
+      % index must be shifted by 1 to allow configuring D0
+      pinModesID = pin + 1;
       if nargin > 2 % if the mode is read in
-        if ~strcmp(obj.pin_modes{pin},mode) % if it's a new mode
+        if ~strcmp(obj.pin_modes{pinModesID},mode) % if it's a new mode
           m = 0;
           switch mode
             case 'AnalogInput'
@@ -296,13 +299,13 @@ classdef arduino < handle % use the class as a handle
               disp('unknown pin mode\n');
               error();
           endswitch
-          obj.pin_modes{pin} = mode;
+          obj.pin_modes{pinModesID} = mode;
           msg = [obj.SET_PIN_MODE,pin,m];
           n = obj.ard_write(obj.connection,char(msg)); % write the actual message
         endif % only run if it was a new mode
       else % if the mode is not read in, return it
         % analog_mapping_query(obj);
-        mode = obj.pin_modes{pin};
+        mode = obj.pin_modes{pinModesID};
       endif
     endfunction % _configurePin
 
