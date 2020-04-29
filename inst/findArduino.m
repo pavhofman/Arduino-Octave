@@ -16,7 +16,8 @@ function ard = findArduino(portPrefix = '')
       ard = arduino(strcat('/dev/', port));
       % found, returning
       return;
-    catch
+    catch err
+      writeLog('DEBUG', sprintf("Arduino lookup: %s - %s", err.identifier, err.message));
     end_try_catch
   endfor
   error("No arduino found");
