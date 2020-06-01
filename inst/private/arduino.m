@@ -362,6 +362,10 @@ classdef arduino < handle % use the class as a handle
         else
           % DIGITAL_MSG
           val = obj._readDigitalMsgData(bit);
+          if isempty(val)
+            disp(sprintf('empty data while reading digital pin %d', pin));
+            err = 1;
+          endif
           % finished
           return;
         endif % DIGITAL_MSG or START_SYSEX
@@ -774,6 +778,10 @@ classdef arduino < handle % use the class as a handle
     function val = _readDigitalMsgData(obj, bit)
       % reading 2 bytes after DIGITAL_MSG
       [data,count] = obj.ard_read(obj.connection,2);
+      if length(data) < 2
+        val = [];
+        return;
+      endif
 
       % extracting the pin value from incoming data
       port_map = bitor(data(1), bitshift(bitand(data(2),1),7)); % make a port map
